@@ -20,10 +20,10 @@
 > Este documento consolida todas as descobertas do Estágio 1.
 > Preencha cada seção com as conclusões do time. **Este é o input principal do Estágio 2** — sem ele, a especificação vira chute.
 
-**Time**: [Nome do Time]
-**Data**: 19/05/2026
-**Edição**:
-**Participantes**: [Liste os membros e suas personas]
+**Time**: grupo-azul-1
+**Data**: 27/05/2026
+**Edição**: 1.0 (final Estágio 1)
+**Participantes**: Par 1 (PO + RE), Par 2 (EA + SA), Par 3 (TL + Dev), Par 4 (DBA + QA), Par 5 (DevOps + TW)
 
 ---
 
@@ -32,23 +32,22 @@
 > Em 3 a 5 frases, resuma o que o time descobriu sobre o SIFAP legado.
 > O que é este sistema? Qual sua criticidade? Qual o estado do código?
 
-[Escreva aqui]
-
----
-
-## 2. Visão Geral do Sistema
+O SIFAP (Sistema de Fiscalização e Administração de Pagamentos) é um sistema crítico de missão nacional mantido há 29 anos em Natural 6.3.12/Adabas 7.4.3, responsável por gerir **4,2 milhões de beneficiários** e gerar pagamentos mensais de benefícios sociais do governo federal. O código é funcional e estabilizado, porém contém **10 regras de negócio escondidas**, uma constante mágica não documentada (`FATOR-K=0.347215`), e uma tabela de correção IPCA desatualizada desde 2014 — todas acumuladas em 29 anos de evolução orgânica. O risco mais sério é a lógica de cálculo replicada inline em BATCHPGT sem CALLNAT, o que pode ter gerado divergência silenciosa entre pagamentos em lote e cálculos avulsos. A migração é urgentíssima: o suporte ao Natural 6.x e ao Adabas 7.x encerra em 2026.
 
 ### 2.1 Propósito do SIFAP
 
-[Descreva o que o sistema faz com base na análise do código]
+O SIFAP é o motor financeiro de distribuição de benefícios sociais do governo federal. Sua função principal é calcular o valor mensal do benefício de cada família cadastrada (aplicando fórmula multiplicativa com 5 fatores), aplicar descontos compulsórios, gerar um arquivo CNAB 240 para os bancos pagadores e conciliar o retorno. O sistema também mantém a trilha de auditoria exigida pela IN-TCU 63/2010.
 
 ### 2.2 Arquitetura Legada
 
-[Descreva a arquitetura: quantos programas, DDMs, fluxos principais]
+O SIFAP é composto por **15 programas Natural** divididos em 4 módulos funcionais e **4 DDMs Adabas** que servem como único mecanismo de integração entre os programas (não há CALLNAT entre módulos — toda comunicação passa pelo banco Adabas). O fluxo principal é linear: **Cadastro** (CADBENEF → CADDEPEND → CADPROG) → **Validação** (VALDOCS → VALBENEF → VALELEG) → **Cálculo** (CALCBENF → CALCDSCT → CALCCORR) → **Batch** (BATCHPGT → BATCHCON → BATCHREL) → **Consulta/Audit** (CONSBENF, RELPGT, RELAUDIT). Os 4 DDMs são: `BENEFICIARIO` (FNR 150, ~4,2M registros), `PROGRAMA-SOCIAL` (FNR 151, ~45 programas), `PAGAMENTO` (FNR 152, ~180M registros), `AUDITORIA` (FNR 153, ~25M eventos).
 
 ### 2.3 Usuários e Perfis
 
-[Quem usa o sistema? Quais perfis de acesso existem?]
+Três perfis identificados nos comentários dos programas:
+- **Operador de Cadastro** — acessa CADBENEF, CADDEPEND, CADPROG via terminal 3270 para registrar beneficiários e programas
+- **Analista/Auditor** — acessa CONSBENF, RELPGT, RELAUDIT para consultas e relatórios
+- **Operador de Batch/TI** — agenda e monitora BATCHPGT, BATCHCON, BATCHREL via JES2 no 1º dia útil de cada mês
 
 ---
 
@@ -58,11 +57,11 @@
 
 > Liste as 5 regras de negócio mais importantes encontradas.
 
-1. [Regra + referência ao catálogo BR-XXX]
-2.
-3.
-4.
-5.
+1. **BR-001** — Fórmula central: `BRUTO = BASE × F_reg × F_fam × F_renda × F_idade × (1 + F_reaj)` — toda a lógica financeira deriva desta fórmula de 5 fatores. `CALCBENF.NSN#L215-L230`
+2. **BR-009** — Teto de 30% para descontos — exceto tipos 'J' (Judicial) e 'P' (Pensão) que não têm teto, podendo zerar o benefício. `CALCDSCT.NSN#L105-L125`
+3. **BR-018** — Batch ordenado por CPF crescente — sistemas downstream do governo federal dependem desta ordem de processamento. `BATCHPGT.NSN#L180-L190`
+4. **BR-014** — COD-REGIAO=99 bypassa completamente todas as validações de elegibilidade. `VALELEG.NSN#L90-L96`
+5. **BR-015** — Eventos de exclusão ('EX') nunca aparecem na trilha de auditoria — viola IN-TCU 63/2010. `RELAUDIT.NSN#L90-L95`
 
 ### 3.2 Dependências Complexas
 
@@ -74,15 +73,17 @@
 
 > Que problemas no código legado vão complicar a migração?
 
-- [ ] [Problema 1]
-- [ ] [Problema 2]
-- [ ] [Problema 3]
+- [ ] Fator K = 0.347215 sem explicação (MYS-001) — é preciso consultar SENARC antes de migrar
+- [ ] Tabela IPCA hardcoded parou em 2014 (MYS-003) — correções após 2014 são silenciosamente nulas
+- [ ] Lógica de cálculo duplicada entre CALCBENF e BATCHPGT (MYS-009) — possível divergência já em produção
+- [ ] Trilha de auditoria incompleta (BR-015) — exclusões não aparecem; provável não-conformidade com TCU
+- [ ] Backdoor de CPF (BR-016) — 8 prefixos especiais contornam o MOD-11; origem desconhecida
 
 ### 3.4 Gaps de Documentação
 
 > O que a documentação existente NÃO cobre?
 
-[Descreva]
+Treze dos 15 programas não possuem comentários de cabeçalho com autor/data. A documentação de 2012 cita limites que divergem do código (ex: limite de dependentes = 3 no documento, 5 no código, 10 no DDM). O COD-REGIAO=99 não é mencionado em nenhuma documentação — descoberto apenas por leitura do código. A constante `0.347215` não tem nenhuma referência documental.
 
 ---
 
@@ -94,15 +95,25 @@
 
 | ID  | Descrição | Risco para Migração |
 | --- | --------- | ------------------- |
-|     |           |                     |
+| MYS-001 | FATOR-K = 0.347215 sem documentação | ALTO — VLR-BASE gravado já com fator aplicado; recalcular incorretamente muda todos os benefícios |
+| MYS-002 | STATUS forçado para 'S' aos 75 anos sem aviso | MÉDIO — comportamento silencioso que deve ser preservado ou tornando explícito |
+| MYS-003 | IPCA hardcoded e parado em 2014 | ALTO — todas as correções desde 2014 são silenciosamente zero; migrar sem corrigir perpetua o erro |
+| MYS-004 | Banco Real com códigos CNAB não-padrão | BAIXO — layout exclusivo para BB; Banco Real foi adquirido; códigos obsoletos |
+| MYS-005 | Limite de dependentes: 3 (doc) vs 5 (código) vs 10 (DDM) | MÉDIO — regra real é 5; DDM pode ser redimensionado |
+| MYS-006 | COD-REGIAO=99 bypassa elegibilidade | CRÍTICO — benefícios sem verificação; origem desconhecida; registros com 99 existem em produção |
+| MYS-007 | Backdoor de 8 prefixos de CPF | ALTO — possivelmente para testes; deve ser removido em produção |
+| MYS-008 | Trilha de auditoria filtra exclusões | CRÍTICO — viola IN-TCU 63/2010; risco de sancão do tribunal |
+| MYS-009 | BATCHPGT duplica CALCBENF sem CALLNAT | ALTO — possível divergência já existente entre cálculos avulsos e pagamentos em lote |
+| MYS-010 | Pró-rata do 13º nunca implementado | MÉDIO — comentado no código mas não implementado; beneficiários com menos de 12 meses recebem 13º cheio |
 
 ### 4.2 Riscos para o Estágio 2
 
 > O que o time de especificação precisa saber antes de começar?
 
-1. [Risco 1]
-2. [Risco 2]
-3. [Risco 3]
+1. **Constante FATOR-K = 0.347215** — consultar urgente a SENARC antes de migrar; qualquer suposição errada muda o valor de 4,2M benefícios
+2. **Divergência CALCBENF vs BATCHPGT** — verificar se já existe diferença entre pagamentos batch e cálculos avulsos auditando o histórico de PAGAMENTO
+3. **Trilha de auditoria com exclusões suprimidas** — o sistema moderno deve iniciar com auditoria completa para evitar não-conformidade TCU desde o dia 1
+4. **Ordenação por CPF no batch** — os sistemas downstream que dependem desta ordenação precisam ser identificados antes de alterar o formato de saída CNAB
 
 ---
 
@@ -114,21 +125,28 @@
 
 | Prioridade | Funcionalidade | Justificativa |
 | ---------- | -------------- | ------------- |
-| 1          |                |               |
-| 2          |                |               |
-| 3          |                |               |
+| 1 | Geração de pagamentos mensais (CALCBENF + CALCDSCT + BATCHPGT) | Fluxo de caixa principal; 4,2M famílias dependem de precisão |
+| 2 | Cadastro e validação de beneficiários (CADBENEF + VALDOCS + VALBENEF + VALELEG) | Base de dados que alimenta tudo; sem cadastro correto, cálculo é inválido |
+| 3 | Conciliação bancária (BATCHCON) | Conformidade financeira; garante que o dinheiro enviado ao banco batem com os registros |
+| 4 | Trilha de auditoria completa (RELAUDIT) | Conformidade legal TCU — deve ser corrigida durante a migração |
+| 5 | Correção retroativa IPCA (CALCCORR) | Deve ser reescrita integrando API do IBGE; tabela hardcoded obsoleta desde 2014 |
 
 ### 5.2 O que descartar
 
 > Funcionalidades que provavelmente não precisam ser migradas:
 
-- [Funcionalidade]: [Motivo para descartar]
+- **Tabela IPCA hardcoded (CALCCORR.NSN):** Descartar a tabela — migrar integrando API pública do IBGE em tempo real
+- **Códigos bancários do Banco Real (EGG-003 em BATCHCON.NSN):** O Banco Real foi adquirido pelo Santander. Os códigos exclusivos não-padrão CNAB devem ser descartados
+- **Lookup de regiões por nome literal (EGG-001 em CALCBENF.NSN):** Substituir por tabela configurável no banco de dados PostgreSQL
 
 ### 5.3 O que evoluir
 
 > Funcionalidades que devem ser migradas E melhoradas:
 
-- [Funcionalidade]: [Como melhorar]
+- **Trilha de auditoria (RELAUDIT):** Migrar E corrigir — tornar eventos de exclusão visíveis, adicionar timestamp do ator responsável, conformar com IN-TCU 63/2010
+- **Validação de CPF (VALDOCS):** Migrar E remover backdoor dos 8 prefixos especiais (ou criar mecanismo explícito de ambiente de teste)
+- **13º benefício (CALCBENF):** Migrar E implementar o pro-rata por meses ativos (comentado no código mas nunca codificado)
+- **Limite de dependentes:** Migrar E unificar o limite para 5 (regra real do código) com campo configurável por programa social
 
 ---
 
@@ -136,14 +154,14 @@
 
 | Métrica                       | Valor        |
 | ----------------------------- | ------------ |
-| Programas analisados          | \_\_\_ / 15  |
-| DDMs mapeados                 | \_\_\_ / 4   |
-| Regras de negócio encontradas | \_\_\_       |
-| Regras escondidas encontradas | \_\_\_ / 10  |
-| Easter eggs encontrados       | \_\_\_ / 3   |
-| Termos no glossário           | \_\_\_       |
-| Mistérios catalogados         | \_\_\_       |
-| Tempo total gasto             | \_\_\_ horas |
+| Programas analisados          | 15 / 15      |
+| DDMs mapeados                 | 4 / 4        |
+| Regras de negócio encontradas | 21           |
+| Regras escondidas encontradas | 10 / 10      |
+| Easter eggs encontrados       | 3 / 3        |
+| Termos no glossário           | 40           |
+| Mistérios catalogados         | 10           |
+| Tempo total gasto             | ~4 horas     |
 
 ---
 
@@ -151,7 +169,13 @@
 
 > Deixe aqui mensagens para o time no Estágio 2 (Especificação Moderna):
 
-[Escreva aqui]
+**Time Estágio 2 (Especificação EARS):**
+
+1. **CONSULTE SENARC sobre o FATOR-K antes de escrever qualquer EARS de cálculo.** A constante `0.347215` está no coração do VLR-BASE gravado em `PROGRAMA-SOCIAL`. Se a suposição estiver errada, toda a especificação de cálculo estará errada.
+2. **Cada EARS de cálculo financeiro deve referenciar exatamente uma das duas fontes** (CALCBENF.NSN ou BATCHPGT.NSN) — documente qual é a fonte da verdade; a outra deve ser descontinuada.
+3. **A ordenação por CPF no batch é um contrato com o mundo externo** — identifique os sistemas downstream antes de alterar qualquer coisa no formato do arquivo de saída.
+4. **A trilha de auditoria deve ser corrigida desde o primeiro commit** — não é opcional; não herde o bug de RELAUDIT.
+5. **As faixas de renda (BR-004) e os fatores regionais (BR-002) estão defasados** — são valores de 2013. Inclua uma EARS para torná-los configuráveis no banco de dados.
 
 ---
 

@@ -32,104 +32,142 @@
 
 ```mermaid
 flowchart TD
- subgraph "Programas Online"
- CADBENF["CADBENF.NSN<br/>Cadastro de Beneficiários"]
- CONBENF["CONBENF.NSN<br/>Consulta de Beneficiários"]
- REGPGTO["REGPGTO.NSN<br/>Registro de Pagamentos"]
- end
+    subgraph CADASTRO["Módulo Cadastro — Online 3270"]
+        CADBENEF["CADBENEF.NSN\nCadastro Beneficiário"]
+        CADDEPEND["CADDEPEND.NSN\nCadastro Dependentes"]
+        CADPROG["CADPROG.NSN\nCadastro Programas"]
+        VALDOCS["VALDOCS.NSN\nValidação Documentos"]
+        VALBENEF["VALBENEF.NSN\nValidação Cadastral"]
+        VALELEG["VALELEG.NSN\nValidação Elegibilidade"]
+    end
 
- subgraph "Programas Batch"
- BATCHPGT["BATCHPGT.NSN<br/>Processamento em Lote"]
- end
+    subgraph CALC["Módulo Cálculo"]
+        CALCBENF["CALCBENF.NSN\nCálculo Benefício"]
+        CALCDSCT["CALCDSCT.NSN\nCálculo Descontos"]
+        CALCCORR["CALCCORR.NSN\nCorreção IPCA"]
+    end
 
- subgraph "Subprogramas"
- CALCBENF["CALCBENF.NSN<br/>Cálculo de Benefícios"]
- VALCPF["VALCPF.NSN<br/>Validação de CPF"]
- end
+    subgraph BATCH["Módulo Batch — JES2 1º dia útil"]
+        BATCHPGT["BATCHPGT.NSN\nGeração Pagamentos"]
+        BATCHCON["BATCHCON.NSN\nConciliação CNAB 240"]
+        BATCHREL["BATCHREL.NSN\nRelatórios Consolidados"]
+    end
 
- subgraph "DDMs Adabas"
- DDM_BENEF[("DDM: BENEFICIARIO")]
- DDM_PGTO[("DDM: PAGAMENTO")]
- end
+    subgraph CONSULTA["Módulo Consulta — Online"]
+        CONSBENF["CONSBENF.NSN\nConsulta Beneficiário"]
+        RELPGT["RELPGT.NSN\nRelatório Pagamentos"]
+        RELAUDIT["RELAUDIT.NSN\nTrilha Auditoria"]
+    end
 
- CADBENF -->|CALLNAT| VALCPF
- CADBENF -->|CALLNAT| CALCBENF
- CADBENF -->|READ/STORE| DDM_BENEF
+    subgraph DDMs["DDMs Adabas"]
+        BENEF[("BENEFICIARIO\nFNR 150")]
+        PGTO[("PAGAMENTO\nFNR 152")]
+        PROG[("PROGRAMA-SOCIAL\nFNR 151")]
+        AUDIT[("AUDITORIA\nFNR 153")]
+    end
 
- REGPGTO -->|CALLNAT| CALCBENF
- REGPGTO -->|READ/STORE| DDM_PGTO
+    %% Cadastro -> DDMs
+    CADBENEF -->|"PERFORM VALIDA-CPF"| VALDOCS
+    CADBENEF -->|"PERFORM VALIDA"| VALBENEF
+    CADBENEF -->|"STORE/UPDATE"| BENEF
+    CADDEPEND -->|"UPDATE PE group"| BENEF
+    CADPROG -->|"STORE"| PROG
+    VALDOCS -->|"READ"| BENEF
+    VALBENEF -->|"READ"| BENEF
+    VALELEG -->|"READ"| BENEF
+    VALELEG -->|"READ"| PROG
 
- CONBENF -->|READ| DDM_BENEF
+    %% Batch -> DDMs (BATCHPGT replica lógica de CALCBENF inline)
+    BATCHPGT -->|"READ BY CPF"| BENEF
+    BATCHPGT -->|"READ"| PROG
+    BATCHPGT -->|"STORE"| PGTO
+    BATCHPGT -->|"lógica inline\n(não CALLNAT)"| CALCBENF
+    BATCHCON -->|"READ WORK FILE 1\n(CNAB 240)"| BATCHCON
+    BATCHCON -->|"UPDATE"| PGTO
+    BATCHCON -->|"STORE"| AUDIT
+    BATCHREL -->|"READ BY COMPETENCIA"| PGTO
+    BATCHREL -->|"READ"| BENEF
 
- BATCHPGT -->|CALLNAT| CALCBENF
- BATCHPGT -->|READ/UPDATE| DDM_PGTO
- BATCHPGT -->|READ| DDM_BENEF
+    %% Cálculo -> DDMs
+    CALCBENF -->|"READ"| BENEF
+    CALCBENF -->|"READ"| PROG
+    CALCBENF -->|"STORE"| PGTO
+    CALCDSCT -->|"READ"| PGTO
+    CALCDSCT -->|"READ"| BENEF
+    CALCCORR -->|"UPDATE"| PGTO
+
+    %% Consulta -> DDMs
+    CONSBENF -->|"READ BY CPF/NIS"| BENEF
+    CONSBENF -->|"READ BY CPF-BENEF"| PGTO
+    RELPGT -->|"READ BY COMPETENCIA"| PGTO
+    RELPGT -->|"READ"| BENEF
+    RELAUDIT -->|"READ BY DT-EVENTO"| AUDIT
 ```
-
-> **Instrução:** este é apenas um exemplo inicial com 6 programas.
-> Seu time deve mapear **todos os 15 programas** e os **4 DDMs**.
 
 ## Diagrama de Fluxo de Dados (DDMs)
 
 ```mermaid
 flowchart LR
- subgraph "Entrada de Dados"
- UI["Terminal 3270"]
- BATCH["Arquivos Batch"]
- end
+    subgraph "Entrada de Dados"
+        UI["Terminal 3270"]
+        CNAB["Arquivo CNAB 240\n(retorno bancário)"]
+    end
 
- subgraph "Processamento"
- PROG["Programas Natural"]
- end
+    subgraph "Processamento"
+        PROG["15 Programas Natural"]
+    end
 
- subgraph "Armazenamento (Adabas)"
- DDM1[("BENEFICIARIO")]
- DDM2[("PAGAMENTO")]
- DDM3[("DDM 3: ???")]
- DDM4[("DDM 4: ???")]
- end
+    subgraph "Armazenamento Adabas"
+        DDM1[("BENEFICIARIO\nFNR 150\n~4,2 mi registros")]
+        DDM2[("PAGAMENTO\nFNR 152\n~180 mi registros")]
+        DDM3[("PROGRAMA-SOCIAL\nFNR 151\n~45 programas")]
+        DDM4[("AUDITORIA\nFNR 153\n~25 mi registros")]
+    end
 
- UI --> PROG
- BATCH --> PROG
- PROG <--> DDM1
- PROG <--> DDM2
- PROG <--> DDM3
- PROG <--> DDM4
+    UI --> PROG
+    CNAB --> PROG
+    PROG <--> DDM1
+    PROG <--> DDM2
+    PROG <--> DDM3
+    PROG --> DDM4
 ```
-
-> Substitua "DDM 3: ???" e "DDM 4: ???" pelos nomes reais encontrados em [`../01-arqueologia/legado-sifap/adabas-ddms/`](../01-arqueologia/legado-sifap/adabas-ddms/).
 
 ## Tabela de Dependências
 
-| Programa     | Chama (CALLNAT) | Lê (READ) DDMs | Escreve (STORE/UPDATE) DDMs | Observações |
+| Programa | Chama (PERFORM/lógica inline) | Lê (READ) DDMs | Escreve (STORE/UPDATE) DDMs | Observações |
 | ------------ | --------------- | -------------- | --------------------------- | ----------- |
-| CADBENF.NSN  |                 |                |                             |             |
-| CONBENF.NSN  |                 |                |                             |             |
-| REGPGTO.NSN  |                 |                |                             |             |
-| BATCHPGT.NSN |                 |                |                             |             |
-| CALCBENF.NSN |                 |                |                             |             |
-| VALCPF.NSN   |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
-|              |                 |                |                             |             |
+| CADBENEF.NSN | PERFORM VALIDA-CPF, VALIDA-NOME | BENEFICIARIO | BENEFICIARIO | Ponto de entrada de cadastro; lida com operações I e A |
+| CADDEPEND.NSN | — | BENEFICIARIO | BENEFICIARIO (PE group) | Atualiza grupo periódico de dependentes |
+| CADPROG.NSN | PERFORM CONSULTA-PROG | PROGRAMA-SOCIAL | PROGRAMA-SOCIAL | Aplica FATOR-K=0.347215 antes de gravar VLR-BASE |
+| VALBENEF.NSN | PERFORM VALIDA-CPF-COMPLETO | BENEFICIARIO | — | Validação apenas de leitura |
+| VALDOCS.NSN | PERFORM VALIDA-CPF-DOC, VALIDA-RG, CHECK-DOC-ESPECIAL | BENEFICIARIO | — | Backdoor de 8 prefixos de CPF especiais |
+| VALELEG.NSN | — | BENEFICIARIO, PROGRAMA-SOCIAL | — | COD-REGIAO=99 bypassa tudo |
+| CALCBENF.NSN | PERFORM DET-FAIXA-RENDA, CALC-DESCONTOS | BENEFICIARIO, PROGRAMA-SOCIAL | PAGAMENTO | Lógica DUPLICADA em BATCHPGT.NSN inline |
+| CALCDSCT.NSN | PERFORM CALC-CONTRIB-SOCIAL | PAGAMENTO, BENEFICIARIO | — | Descontos judiciais sem teto de 30% |
+| CALCCORR.NSN | PERFORM CALC-INDICE-ACUM | PAGAMENTO | PAGAMENTO | Tabela IPCA parada em 2014 |
+| BATCHPGT.NSN | Lógica de CALCBENF/CALCDSCT INLINE | BENEFICIARIO, PROGRAMA-SOCIAL | PAGAMENTO | Replica regras de cálculo sem CALLNAT — risco de divergência |
+| BATCHCON.NSN | PERFORM GRAVA-AUDITORIA-DIVERG | PAGAMENTO | PAGAMENTO, AUDITORIA | Layout CNAB 240 Banco do Brasil hardcoded |
+| BATCHREL.NSN | PERFORM IMPRIME-CABECALHO | PAGAMENTO, BENEFICIARIO | — | Usa arredondamento, divergindo de CALCBENF |
+| CONSBENF.NSN | PERFORM MASCARA-CPF | BENEFICIARIO, PAGAMENTO | — | Bug conhecido na máscara de CPF documentado no código |
+| RELPGT.NSN | PERFORM IMPRIME-REL | PAGAMENTO, BENEFICIARIO | — | Relatório analítico de pagamentos por competência |
+| RELAUDIT.NSN | PERFORM IMPRIME-CAB-AUDIT | AUDITORIA | — | Filtra exclusões ('EX') silenciosamente |
 
 ## Dependências Circulares
 
-> Liste aqui qualquer dependência circular encontrada (programa A chama B que chama A):
+Nenhuma dependência circular encontrada. Os programas Natural não usam CALLNAT entre si — a comunicação se dá exclusivamente via DDMs Adabas (acesso compartilhado ao banco de dados).
 
-- Nenhuma encontrada até agora.
+> **Nota crítica:** BATCHPGT **não chama** CALCBENF via CALLNAT — replica a lógica inline por performance. Isso é uma pseudo-dependência que pode ter divergido.
 
 ## Programas Órfãos
 
-> Programas que não são chamados por nenhum outro (possíveis pontos de entrada ou código morto):
+Nenhum programa é órfão — todos os 15 programas têm um papel identificado:
 
-- A investigar.
+- **CADBENEF, CADDEPEND, CADPROG, VALBENEF, VALDOCS, VALELEG, CONSBENF** — invocados pelos operadores via terminal 3270
+- **BATCHPGT, BATCHCON, BATCHREL** — invocados pelo scheduler JES2 no 1º dia útil
+- **CALCBENF, CALCDSCT, CALCCORR** — chamados por operadores para cálculos pontuais (não chamados por outros programas via CALLNAT)
+- **RELPGT, RELAUDIT** — invocados sob demanda por auditores e analistas
+
+> **Atenção:** CALCBENF e CALCDSCT parecem ser pontos de entrada independentes mas sua lógica é replicada em BATCHPGT. Na migração, devem virar um único serviço Java chamado por todos.
 
 ---
 
